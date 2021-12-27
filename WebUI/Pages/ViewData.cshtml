@@ -1,0 +1,265 @@
+﻿@page
+@model WebUI.Pages.ViewDataModel
+@{
+    Layout = "_Layout";
+    ViewData["Title"] = "View Data";
+}
+
+<style>
+    body { font-family: sans-serif; font-size: large; }
+
+    #label_select, #image_number, #view_btn {font-family:sans-serif; font-size:large}
+    #viewer_ui_container { display: flex; flex-wrap: wrap; }
+    .viewer_ui_div { margin: 10px 50px 10px 10px; white-space: nowrap; font-size: large; font-family: sans-serif; }
+    .viewer_ui_canvas1 { vertical-align: middle; border: 2px solid blue; vertical-align: middle; }
+    .viewer_ui_canvas2 { vertical-align: middle; border: 2px solid blue; vertical-align: middle; margin: 0 0 0 20px; }
+</style>
+
+
+<div>
+    <select id="label_select">
+        @foreach (var label in Model.Labels)
+        {
+            <option value="@label">@label</option>
+        }
+    </select>
+
+    <input id="image_number" type="number" value="0" />
+    <button id="view_btn">View</button>
+</div>
+
+<div id="viewer_ui_container"></div>
+
+
+<script>
+    "use strict"
+
+    function $(id) { return document.getElementById(id) }
+
+
+    /////////////////////////////////////////////////////////////////
+    // Download images from server
+
+    // Returns an object with properties: success, height, width, type, 
+    //                  bytes, max_images_per_file, bytes_per_image
+    async function get_images(prefix) {
+        try {
+            let data = {
+                "Prefix": prefix,
+                "Label": $("label_select").value,
+                "ImageNumber": $("image_number").value
+            }
+
+            let response = await fetch('https://@Model.Host/api/image-data/get_images',
+                {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(data),
+                })
+
+            if (response.status != 200) {
+                throw new Error("")
+            }
+
+            let response_data = await response.json()
+
+            if (response_data.success != true)
+                throw new Error("")
+
+            // Attach "bytes_per_image"
+            let bytes_per_image = 0
+            let type = response_data.type
+            let width = response_data.width
+            let height = response_data.height
+
+            if (type == "G")
+                bytes_per_image = height * width
+            else if (type == "B") 
+                bytes_per_image = Math.ceil(height * width / 8)
+            else 
+                throw new Error("")
+            
+
+            return {
+                success: true,
+                height: response_data.height,
+                width: response_data.width,
+                type: response_data.type, 
+                bytes: base64_string_to_array(response_data.base64_Data),
+                max_images_per_file: response_data.maxImagesPerFile,
+                bytes_per_image: bytes_per_image
+            }
+        }
+        catch (error) {
+            return {success: false}
+        }
+    }
+
+
+    // Convert from base64 string to array
+    function base64_string_to_array(base64_string) {
+        let b = atob(base64_string)
+        let b2 = []
+
+        for (let i = 0; i < b.length; i++)
+            b2.push(b.charCodeAt(i))
+
+        return b2
+    }
+
+
+    async function view_btn_handler() {
+        let original_images = await get_images("original/")
+        let standard_images = await get_images("standard/")
+
+        // The "original_images" is required
+        if (original_images.success == false) {
+            alert("Unable to retrieve images")
+            return
+        }
+
+        // Determine "first_image_number"
+        let image_number = parseInt($("image_number").value)
+        let first_image_number = Math.floor(image_number / original_images.max_images_per_file) * original_images.max_images_per_file
+
+        draw_ui(original_images, standard_images, first_image_number)
+    }
+
+
+    $("view_btn").onclick = function () {
+        view_btn_handler()
+    }
+
+    /////////////////////////////////////////////////////////////////
+    // Draw UI
+
+    const scale = 10
+
+    function draw_ui(original_images, standard_images, first_image_number) {
+
+        // Remove all child nodes from "viewer_ui_container"
+        while ($("viewer_ui_container").firstChild)
+            $("viewer_ui_container").removeChild($("viewer_ui_container").firstChild)
+
+        // properties of the images: success, height, width, type, 
+        //                  bytes, max_images_per_file, bytes_per_image
+
+        let num_images = Math.floor(original_images.bytes.length / original_images.bytes_per_image)
+        let image_number = first_image_number
+
+        for (let i = 0; i < num_images; i++) {
+            // Create UI for the i-th image
+            // <div class="viewer_ui_div">
+            let div = document.createElement("div")
+            div.className = "viewer_ui_div"
+            $("viewer_ui_container").appendChild(div)
+
+            //     Image number
+            //     <span>#100</span>
+            let span = document.createElement("span")
+            span.innerText = "#" + image_number
+            div.appendChild(span)
+
+            image_number++
+
+            //    Canvas for the original image
+            //    <canvas width="160" height="160" class="viewer_ui_canvas1"></canvas>           
+            let c1 = document.createElement("canvas")
+            c1.width = original_images.width * scale
+            c1.height = original_images.height * scale
+            c1.className = "viewer_ui_canvas1"
+            div.appendChild(c1)
+
+            if (original_images.success)
+                draw_image(original_images, c1, i)
+
+            //    Canvas for the standardized image
+            //    <canvas width="80" height="80"  class="viewer_ui_canvas2"></canvas>
+            let c2 = document.createElement("canvas")
+            c2.width = 8 * scale
+            c2.height = 8 * scale
+            c2.className = "viewer_ui_canvas2"
+            div.appendChild(c2)
+
+            if (standard_images.success)
+                draw_image(standard_images, c2, i)
+        }
+
+    }
+
+
+    /////////////////////////////////////////////////////////////////
+    // Draw images
+
+    // Draws the i-th image to "canvas".
+    function draw_image(images, canvas, i) {
+        // properties of the images: success, height, width, type, 
+        //                  bytes, max_images_per_file, bytes_per_image
+        
+        let type = images.type
+        let height = images.height
+        let width = images.width
+
+        let bytes_per_image = images.bytes_per_image
+        let bytes = images.bytes.slice(i * bytes_per_image, (i+1) * bytes_per_image)
+
+        if (type == "B") 
+            draw_image_black_and_white(canvas, bytes, height, width)
+
+        else if (type == "G")
+            draw_image_gray_scale(canvas, bytes, height, width)
+        
+    }
+
+
+    // Draw a black and white image onto canvas
+    function draw_image_black_and_white(canvas, bytes, height, width) {
+        let offset = 0
+        let current_byte = bytes[0]
+        let bit_in_current_byte = 0 // goes from 0 to 7, then back to 0
+
+        canvas = canvas.getContext("2d")
+        canvas.fillStyle = "black"
+
+        for (let i = 0; i < height; i++) {
+            for (let j = 0; j < width; j++) {
+
+                // draw MSB of "current_byte" onto canvas[i * scale][j * scale]
+                if ((current_byte & 0x80) != 0) {
+                    canvas.fillRect(j * scale, i * scale, scale, scale)
+                }
+
+                current_byte = current_byte << 1
+                bit_in_current_byte++
+
+                if (bit_in_current_byte >= 8) {
+                    offset++
+                    current_byte = bytes[offset]
+                    bit_in_current_byte = 0
+                }
+            }
+        }
+    }
+
+
+    // Draw a gray scale image onto canvas
+    function draw_image_gray_scale(canvas, bytes, height, width) {
+        canvas = canvas.getContext("2d")
+        let offset = 0
+
+        for (let i = 0; i < height; i++)
+            for (let j = 0; j < width; j++) {
+
+                // draw canvas[i * scale][j * scale]
+                let v = bytes[offset]
+                canvas.fillStyle = `rgb(${255 - v}, ${255 - v}, ${255 - v})`
+
+                canvas.fillRect(j * scale, i * scale, scale, scale)
+
+                offset++
+            }
+    }
+
+</script>

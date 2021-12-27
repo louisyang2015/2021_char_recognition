@@ -1,0 +1,62 @@
+﻿
+<html>
+<head>
+    <title>@ViewData["Title"]</title>
+</head>
+<body>
+    @{
+        string title = (string)ViewData["Title"];
+    }
+
+    <style>
+        #nav_bar {margin: 10px 0 30px 0}
+        #nav_bar span {font-size: 130%; background-color: lightyellow; color: #BD00BD; font-weight: bold}
+        #nav_bar a {color: rgb(26, 140, 255); text-decoration: none}
+        #nav_bar a:visited {color: rgb(26, 140, 255); text-decoration: none}
+        #nav_bar a:hover {text-decoration: underline;}
+    </style>
+
+    <div id="nav_bar">
+        @if (title == "Add Data")
+        {
+            <span>Add Data</span>
+        }
+        else
+        {
+            <a href="/AddData">Add Data</a>
+        }
+        |
+
+        @if (title == "View Data")
+        {
+            <span>View Data</span>
+        }
+        else
+        {
+            <a href="/ViewData">View Data</a>
+        }
+        |
+        
+        @if (title == "ML")
+        {
+            <span>ML</span>
+        }
+        else
+        {
+            <a href="/ML">ML</a>
+        }
+        |
+
+        @if (title == "Demo")
+        {
+            <span>Demo</span>
+        }
+        else
+        {
+            <a href="/Demo">Demo</a>
+        }
+
+    </div>
+    @RenderBody()
+</body>
+</html>

@@ -1,0 +1,347 @@
+﻿@page
+@model WebUI.Pages.DemoModel
+@{
+    Layout = "_Layout";
+    ViewData["Title"] = "Demo";
+}
+
+
+<style>
+    body, button, input { font-family: sans-serif; font-size: large; }
+
+    #black_pen, #white_pen { width: 30px; height: 30px; display: inline-block; cursor: pointer; }
+
+    #clear_btn { width: 70px; height: 30px; display: inline-block; cursor: pointer; margin-left: 170px; text-align: center; padding: 10px 0 0 0; color: blue }
+        #clear_btn:hover { background-color: lightyellow; }
+
+    #save_btn { cursor: pointer; padding: 2px 10px 2px 10px; }
+</style>
+
+
+<div>
+    <div>
+        <span id="black_pen" style="border: 3px solid gold; background-color: black;">&nbsp;</span>
+        <span id="white_pen" style="border: 1px solid black;">&nbsp;</span>
+        <span id="clear_btn">Clear</span>
+    </div>
+
+    <canvas id="canvas" style="border: 2px solid black; display: block;"></canvas>
+
+    <div style="margin: 20px 0">
+        <button id="identify_btn">Identify</button>
+    </div>
+
+    <p id="image_identity_p"></p>
+
+</div>
+
+
+
+
+
+
+<script>
+
+    /////////////////////////////////////////////////////////////////
+    // Convenience functions
+
+    function $(id) {
+        return document.getElementById(id)
+    }
+
+
+    class Drawing_UI {
+        /////////////////////////////////////////////////////////////////
+        // Initialization
+
+        set_canvas_size() {
+            let canvas = $("canvas")
+            let size = this.size
+            let scale = this.scale
+
+            canvas.height = size * scale
+            canvas.width = size * scale
+        }
+
+        draw_background_grid() {
+            let canvas = $("canvas").getContext("2d")
+            let size = this.size
+            let scale = this.scale
+
+            canvas.strokeStyle = "#9494b8";
+
+            for (let i = 0; i < size; i++) {
+                // Horizontal grid line
+                canvas.beginPath()
+                canvas.moveTo(0, i * scale)
+                canvas.lineTo(size * scale, i * scale)
+                canvas.stroke()
+
+                // Vertical grid line
+                canvas.beginPath()
+                canvas.moveTo(i * scale, 0)
+                canvas.lineTo(i * scale, size * scale)
+                canvas.stroke()
+            }
+        }
+
+        /////////////////////////////////////////////////////////////////
+        // Application data structure initialization
+        init_pixels() {
+            let pixels = this.pixels
+            let size = this.size
+
+            for (let i = 0; i < size; i++) {
+                pixels.push([])
+
+                for (let j = 0; j < size; j++)
+                    pixels[i].push(0)
+            }
+        }
+
+        /////////////////////////////////////////////////////////////////
+        // Handle drawing by clicking the mouse
+        draw_pixel(x, y) {
+            let canvas = $("canvas").getContext("2d")
+            let pixels = this.pixels
+            let scale = this.scale
+
+            if (pixels[y][x] == 0)
+                canvas.fillStyle = "white"
+            else
+                canvas.fillStyle = "black"
+
+            canvas.fillRect(x * scale + 1, y * scale + 1, scale - 2, scale - 2)
+        }
+
+
+        handle_user_input(mouse_x, mouse_y) {
+            let scale = this.scale
+            let pen = this.pen
+
+            // Translate mouse (x,y) to image (x,y)
+            let rect = $("canvas").getBoundingClientRect();
+            let x = Math.floor((mouse_x - rect.left) / scale)
+            let y = Math.floor((mouse_y - rect.top) / scale)
+
+            let pixels = this.pixels
+
+
+            if (pixels[y][x] != pen) {
+                pixels[y][x] = pen
+                this.draw_pixel(x, y)
+            }
+        }
+
+        /////////////////////////////////////////////////////////////////
+        // Handle drawing by moving the mouse
+
+        on_mouse_down(e) {
+            if (e.button == 0)
+                this.left_mouse_down = true;
+        }
+
+        on_mouse_up(e) {
+            if (e.button == 0)
+                this.left_mouse_down = false;
+        }
+
+        on_mouse_move(e) {
+            if (this.left_mouse_down) {
+                if (this.mouse_move_handler_scheduled == false) {
+                    this.mouse_move_handler_scheduled = true;
+
+                    setTimeout(() => {
+                        this.mouse_move_handler_scheduled = false
+                        this.handle_user_input(e.x, e.y)
+                    }, 10);
+                }
+            }
+        }
+
+
+        /////////////////////////////////////////////////////////////////
+        // Handle changing the pen color
+
+        change_to_black_pen() {
+            if (this.pen == 1) return
+
+            this.pen = 1;
+
+            $("white_pen").style.borderWidth = "1"
+            $("white_pen").style.borderColor = "black"
+
+            $("black_pen").style.borderWidth = "3"
+            $("black_pen").style.borderColor = "gold"
+        }
+
+        change_to_white_pen() {
+            if (this.pen == 0) return
+
+            this.pen = 0;
+
+            $("black_pen").style.borderWidth = "1"
+            $("black_pen").style.borderColor = "black"
+
+            $("white_pen").style.borderWidth = "3"
+            $("white_pen").style.borderColor = "gold"
+        }
+
+        /////////////////////////////////////////////////////////////////
+        // Clear the image
+        clear_pixels() {
+            this.pixels = []
+            this.init_pixels()
+
+            for (let i = 0; i < this.size; i++)
+                for (let j = 0; j < this.size; j++)
+                    this.draw_pixel(i, j)
+        }
+
+
+        /////////////////////////////////////////////////////////////////
+        // Return byte array for storage
+        get_byte_array() {
+            let pixels = this.pixels
+            let byte_array = []
+
+            let byte = 0
+            let byte_counter = 0 // runs from 0 to 7
+
+            for (let i = 0; i < this.size; i++)
+                for (let j = 0; j < this.size; j++) {
+                    byte = byte << 1
+                    if (pixels[i][j] == 1)
+                        byte++
+
+                    byte_counter++
+
+                    if (byte_counter >= 8) {
+                        byte_array.push(byte)
+                        byte_counter = 0
+                        byte = 0
+                    }
+                }
+
+            if (byte_counter != 0)
+                byte_array.push(byte)
+
+            return byte_array
+        }
+
+        /////////////////////////////////////////////////////////////////
+
+        constructor() {
+            // Constants
+            this.scale = 20     // const scale = 20
+            this.size = 16      // const size = 16
+
+            // Application data structure
+            this.pen = 1 // draw using "1" (black)
+            this.pixels = []
+            // Row major storage order is used. So the pixel at
+            // (x, y) is stored at pixels[y][x]. The pixel
+            // at (10,5) is 10th pixel from the left, and 5th pixel
+            // from the top, and it's stored as row 5, column 10,
+            // at location pixels[y][x].
+
+            // Track the mouse down state
+            this.left_mouse_down = false
+
+            // A flag to reduce the number of "mousemove" events
+            this.mouse_move_handler_scheduled = false
+
+            this.set_canvas_size()
+            this.draw_background_grid()
+            this.init_pixels()
+        }
+    }
+
+
+    /////////////////////////////////////////////////////////////////
+    // Setting up the "Drawing_UI"
+    let drawing_ui = new Drawing_UI()
+
+    //  Event Handlers
+    $("canvas").onclick = function (e) {
+        drawing_ui.handle_user_input(e.x, e.y)
+    }
+
+    window.onmousedown = function (e) {
+        drawing_ui.on_mouse_down(e)
+    }
+
+    window.onmouseup = function (e) {
+        drawing_ui.on_mouse_up(e)
+    }
+
+    $("canvas").onmousemove = function (e) {
+        drawing_ui.on_mouse_move(e)
+    }
+
+    $("black_pen").onclick = function (e) {
+        drawing_ui.change_to_black_pen()
+    }
+
+    $("white_pen").onclick = function (e) {
+        drawing_ui.change_to_white_pen()
+    }
+
+
+    /////////////////////////////////////////////////////////////////
+    // Event handlers for the "New", "Identify"
+    $("clear_btn").onclick = function () {
+        drawing_ui.clear_pixels()
+    }
+
+    // Upload image to server for identification
+    async function identify_image(image_bytes) {
+        try {
+
+            $("image_identity_p").innerText = ""
+
+            let data = {
+                "type": "B",
+                "height": 16,
+                "width": 16,
+                "bytes": image_bytes
+            }
+
+            let response = await fetch('https://@Model.Host/api/demo/id_image',
+                {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(data),
+                })
+
+            if (response.status != 200) {
+                throw new Error("")
+            }
+
+            let response_data = await response.json()
+
+            if (response_data.success) {
+                $("image_identity_p").innerText = response_data.label
+            }
+            else
+                throw new Error("Server did not respond with \"success\".")
+        }
+        catch (error) {
+            alert("Failed to upload image to server.")
+            console.log(error)
+        }
+    }
+
+
+    $("identify_btn").onclick = function () {
+        let byte_array = drawing_ui.get_byte_array()
+
+        identify_image(byte_array)
+    }
+
+</script>
+
+
+

@@ -1,0 +1,510 @@
+﻿@page
+@model WebUI.Pages.MLModel
+@{
+    Layout = "_Layout";
+    ViewData["Title"] = "ML";
+}
+
+
+<style>
+    body, button, input, select { font-family: sans-serif; font-size: large; }
+
+    canvas { border: 2px solid blue; margin: 10px; cursor: pointer }
+        canvas.Selected { border: 4px solid green; margin: 8px; cursor: pointer }
+
+    p.Canvas_Message { text-align: center; margin: 0; color: green; font-size: smaller }
+
+    table { font-family: sans-serif; font-size: large; border: 2px solid black; border-spacing: 0px; }
+    td { border: 1px solid black; }
+</style>
+
+<!-------------------- Test UI -------------------->
+
+<span>Test</span>
+<select id="label_select">
+    <option value="All Labels">All Labels</option>
+    @foreach (var label in Model.Labels)
+    {
+        <option value="@label">@label</option>
+    }
+</select>
+<select id="data_select">
+    <option value="All Data">All Data</option>
+    <option value="Some Data">Some Data</option>
+</select>
+<span id="test_data_range_ui" style="display: none">
+    <span>Images</span>
+    <input id="start_txt" type="number">
+    <span>~</span>
+    <input id="end_txt" type="number">
+</span>
+<button id="test_btn">Test</button>
+
+<!-------------------- Summary UI -------------------->
+
+<div id="summary_div" style="margin:40px 10px"></div>
+
+<!-------------------- Misclassified Images UI -------------------->
+<div id="m_images_select_div"></div>
+<div id="m_images_div" style="display: flex; flex-wrap: wrap;"></div>
+
+<!-------------------- Retrain Recognizer UI -------------------->
+<button id="retrain_btn" style="display:none; margin: 40px 10px">Retrain Recognizer</button>
+
+<div id="retrain_messages_div"></div>
+
+
+<script>
+
+    'use strict';
+
+    /////////////////////////////////////////////////////
+    // Library
+
+    function $(id) { return document.getElementById(id) }
+
+    async function call_api(api, req) {
+        let response = await fetch('https://@Model.Host/api/' + api,
+                {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(req),
+                })
+
+        if (response.status != 200) {
+            throw new Error("Server did not respond with code 200.")
+        }
+
+        let response_data = await response.json()
+
+        return response_data
+    }
+
+    function remove_all_child_nodes(parent) {
+        while (parent.firstChild) {
+            parent.removeChild(parent.firstChild);
+        }
+    }
+
+    // Creates a new element "<child>", attaches it to the "parent",
+    // and returns the child element.
+    function create_child(parent, child) {
+        let c = document.createElement(child)
+        parent.appendChild(c)
+        return c
+    }
+
+    // Create new elements, where "children" is an array of strings. Each
+    // child node created will be attached to parent. Return the array
+    // of child nodes created.
+    function create_children(parent, children) {
+        let c_array = []
+
+        for (let child_str of children) {
+            let c = document.createElement(child_str)
+            parent.appendChild(c)
+            c_array.push(c)
+        }
+
+        return c_array
+    }
+
+    // Convert from base64 string to array
+    function base64_string_to_array(base64_string) {
+        let b = atob(base64_string)
+        let b2 = []
+
+        for (let i = 0; i < b.length; i++)
+            b2.push(b.charCodeAt(i))
+
+        return b2
+    }
+
+
+    /////////////////////////////////////////////////////
+    // Test UI code
+
+    $("data_select").onchange = () => {
+        if($("data_select").value == "All Data")
+            $("test_data_range_ui").style.display = "none"
+        else
+            $("test_data_range_ui").style.display = "inline"
+    }
+
+    $("test_btn").onclick = () => {
+        start_test()
+    }
+
+    async function start_test() {
+        try {
+
+            let req = {
+                label: $("label_select").value,
+                data: $("data_select").value,
+                start: $("start_txt").value,
+                end: $("end_txt").value
+            }
+
+            let response = await call_api("ml/test_data", req)
+
+            if (response.received != true)
+                throw new Error("Server did not receive test request.")
+
+            m_image_ui.remove_ui()
+
+            summary_ui.init()
+        }
+        catch (error) {
+            alert("Error. " + error.message)
+        }
+    }
+
+
+    /////////////////////////////////////////////////////
+    // Summary UI code
+
+    class SummaryUI {
+
+        init() {
+            remove_all_child_nodes($("summary_div"))
+
+            // The UI is a table that has four columns: labels, correct, incorrect,
+            // and unknown
+            let labels = []
+
+            // Determine the labels
+            if ($("label_select").value != "All Labels")
+                // Case: Single label
+                labels.push($("label_select").value)
+
+            else {
+                // Case: All labels except for the "All Labels"
+                let children = $("label_select").children
+
+                for (let i = 1; i < children.length; i++) {
+
+                    let label = children[i].getAttribute("value")
+                    if (label != "All Labels")
+                        labels.push(label)
+                }
+            }
+
+            // Send the generated labels to the next UI, the "M_ImageUI"
+            m_image_ui.labels = labels
+
+            // Generate table
+            let table = create_child($("summary_div"), "table")
+
+            // Create the header row
+            let tr = create_child(table, "tr")
+            let td_array = create_children(tr, ["td", "td", "td", "td"])
+            td_array[1].innerText = "Correct"
+            td_array[2].innerText = "Incorrect"
+            td_array[3].innerText = "Unknown"
+
+            // The data structure for the table:
+            this.test_result_td = {}
+            // where test_result_td["label"].correct returns the <td> tag
+            // for row "label", column "correct"
+
+            // Create one additional row per label
+            for (let label of labels) {
+                let tr = create_child(table, "tr")
+                td_array = create_children(tr, ["td", "td", "td", "td"])
+                td_array[0].innerText = label
+
+                this.test_result_td[label] = {}
+                this.test_result_td[label].correct = td_array[1]
+                this.test_result_td[label].incorrect = td_array[2]
+                this.test_result_td[label].unknown = td_array[3]
+            }
+
+            setTimeout(this.update, 1000)
+        }
+
+        // Fills "this.test_result_td" with the latest results
+        async update() {
+            // Note, this function can be called via "setTimeout",
+            // so the "this" pointer does not work here.
+
+            let response = await call_api("ml/get_test_results", {})
+
+            for (let result of response.results) {
+                let label = result.label
+                summary_ui.test_result_td[label].correct.innerText = result.correct
+                summary_ui.test_result_td[label].incorrect.innerText = result.incorrect
+                summary_ui.test_result_td[label].unknown.innerText = result.unknown
+            }
+
+            // Send the "results" to the next UI, the "M_ImagesUI"
+            m_image_ui.data = response.results
+
+            if (response.done == false)
+                // Refresh UI as latest results become available
+                setTimeout(summary_ui.update, 1000)
+            else
+                // Once all results are in, initialize the next UI
+                m_image_ui.init()
+        }
+    }
+
+    let summary_ui = new SummaryUI()
+
+
+    /////////////////////////////////////////////////////
+    // Misclassified Images UI code
+
+    const scale = 15 // The 8x8 images are rendered as 120x120
+
+    class M_ImagesUI {
+        // Member variables:
+        //      data[] - contains misclassified image numbers
+        //      Each object in the data array contains:
+        //          * label (string)
+        //          * misclassifieds (integer array)
+        //          * selected_flags (bool array)
+        //
+        //      current_data_index - which object in the data[] is being
+        //                           rendered
+        //
+        //      labels - contains labels, as ordered in the top <select>
+        //      select - the <select> tag under <div id="m_images_select_div">
+
+
+        remove_ui() {
+            remove_all_child_nodes($("m_images_select_div"))
+            remove_all_child_nodes($("m_images_div"))
+        }
+
+        init() {
+            remove_all_child_nodes($("m_images_select_div"))
+            remove_all_child_nodes($("m_images_div"))
+
+            // For "data", attach an additional "selected" bool array to
+            // record which misclassified images are selected
+            let data = this.data
+
+            for (let i = 0; i < data.length; i++) {
+                data[i].selected_flags = []
+
+                for (let j = 0; j < data[i].misclassifieds.length; j++)
+                    data[i].selected_flags.push(false)
+            }
+
+            // For "data", sort all of the "misclassifieds" (list of numbers).
+            // A sorted list is required by the server side APIs, to make
+            // it easier to extract the actual images from the ".bin" files.
+            for (let i = 0; i < data.length; i++) {
+                data[i].misclassifieds.sort((a, b) => a - b)
+            }
+
+            // Generate the "Misclassified images for" text
+            let span = create_child($("m_images_select_div"), "span")
+            span.innerText = "Misclassified images for"
+            span.style.margin = "0 10px 0 0"
+
+            // Generate the select box
+            let select = create_child($("m_images_select_div"), "select")
+
+            for (let label of this.labels) {
+                let option = create_child(select, "option")
+                option.innerText = label
+                option.setAttribute("value", label)
+            }
+
+            // Save the select tag for later
+            this.select = select
+
+            select.onchange = () => { m_image_ui.label_selection_changed() }
+            this.label_selection_changed()
+
+            $("retrain_btn").style.display = "block"
+        }
+
+        async label_selection_changed() {
+            remove_all_child_nodes($("m_images_div"))
+
+            let label = this.select.value
+
+            // determine which "data" entry has this label
+            let data = this.data
+            let index = 0
+
+            for (let i = 0; i < data.length; i++)
+                if (data[i].label == label)
+                    index = i
+
+            // Save the "index" for later use
+            this.current_data_index = index
+
+            // Retrieve the misclassified images
+            let req = {
+                prefix: "standard/",
+                label: label,
+                sortedImageNumbers: data[index].misclassifieds,
+            }
+            let response = await call_api("image-data/get_images_by_number", req)
+
+            let images_bytes = base64_string_to_array(response.base64_Data)
+
+            // Create UI for the misclassified images
+            for (let i = 0; i < data[index].misclassifieds.length; i++) {
+
+                // Create the <span> <canvas><p> </span> tags
+                let span = create_child($("m_images_div"), "span")
+
+                let canvas = create_child(span, "canvas")
+                canvas.setAttribute("height", 120)
+                canvas.setAttribute("width", 120)
+
+                this.draw_image_black_and_white(canvas,
+                    images_bytes.slice(i * 8, (i + 1) * 8),
+                    8, 8)
+
+                let p_tag = create_child(span, "p")
+                p_tag.setAttribute("class", "Canvas_Message")
+
+                // Apply border to the canvas if it has been selected by the user
+                if (data[index].selected_flags[i]) {
+                    canvas.setAttribute("class", "Selected")
+                }
+
+                // Event handler for clicking on the canvas
+                canvas.onclick = () => { m_image_ui.toggle_canvas(i, canvas, p_tag) }
+            }
+        }
+
+        // Draw a black and white image onto canvas
+        draw_image_black_and_white(canvas, bytes, height, width) {
+            let offset = 0
+            let current_byte = bytes[0]
+            let bit_in_current_byte = 0 // goes from 0 to 7, then back to 0
+
+            canvas = canvas.getContext("2d")
+            canvas.fillStyle = "black"
+
+            for (let i = 0; i < height; i++) {
+                for (let j = 0; j < width; j++) {
+
+                    // draw MSB of "current_byte" onto canvas[i * scale][j * scale]
+                    if ((current_byte & 0x80) != 0) {
+                        canvas.fillRect(j * scale, i * scale, scale, scale)
+                    }
+
+                    current_byte = current_byte << 1
+                    bit_in_current_byte++
+
+                    if (bit_in_current_byte >= 8) {
+                        offset++
+                        current_byte = bytes[offset]
+                        bit_in_current_byte = 0
+                    }
+                }
+            }
+        }
+
+        toggle_canvas(canvas_index, canvas, p_tag) {
+            let data = this.data[this.current_data_index]
+            let selected_flag = data.selected_flags[canvas_index]
+
+            if (selected_flag) {
+                // The canvas's old state is "selected".
+                data.selected_flags[canvas_index] = false
+                canvas.setAttribute("class", "")
+            }
+            else {
+                // The canvas's old state is "NOT selected".
+                data.selected_flags[canvas_index] = true
+                canvas.setAttribute("class", "Selected")
+                p_tag.innerText = "Add to training"
+
+                setTimeout(() => p_tag.innerText = "", 2000)
+            }
+        }
+    }
+
+    let m_image_ui = new M_ImagesUI()
+
+
+    /////////////////////////////////////////////////////
+    // Retrain Recognizer UI code
+
+    class RetrainUI {
+        async start_retrain() {
+
+            remove_all_child_nodes($("retrain_messages_div"))
+
+            try {
+                let req = {}
+
+                // Encode the new data that will be added to the ML
+                req.new_data = []
+
+                let data = m_image_ui.data
+
+                for (let i = 0; i < data.length; i++) {
+                    let character = {}
+                    character.label = data[i].label
+                    character.new_data = []
+
+                    // Loop over the "selected_flags" of data[i] to see which
+                    // images got selected by the user to be included in the latest
+                    // round of training
+                    for (let j = 0; j < data[i].misclassifieds.length; j++) {
+
+                        if (data[i].selected_flags[j]) {
+                            character.new_data.push(data[i].misclassifieds[j])
+                        }
+                    }
+
+                    req.new_data.push(character)
+                }
+
+                let response = await call_api("ml/start_retrain", req)
+                                
+                if (response.received != true)
+                    throw new Error("Server did not receive retrain request.")
+
+                if (response.error != null)
+                    throw new Error(response.error)
+
+                this.update()
+            }
+            catch (error) {
+                alert("Error. " + error.message)
+            }
+        }
+
+        // Fills "retrain_messages_div" with latest messages
+        async update() {
+            // Note, this function can be called via "setTimeout",
+            // so the "this" pointer does not work here.
+
+            let response = await call_api("ml/get_training_progress", {})
+
+            // Add any messages to "retrain_messages_div"
+            if (response.messages != null) {
+                for (let m of response.messages) {
+                    let p = create_child($("retrain_messages_div"), "p")
+                    p.innerText = m
+                }
+            }
+
+            if (response.done == false)
+                // Try to get an update again one second later
+                setTimeout(retrain_ui.update, 1000)
+        }
+    }
+    
+    let retrain_ui = new RetrainUI()
+
+
+    $("retrain_btn").onclick = () => {
+        retrain_ui.start_retrain()
+    }
+
+
+</script>
+
